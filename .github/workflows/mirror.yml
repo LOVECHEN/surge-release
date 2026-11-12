@@ -1,0 +1,91 @@
+name: Mirror Surge for Mac
+
+on:
+  schedule:
+    - cron: '17 0,4,8,12,16,20 * * *'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: Backfill all available historical builds
+        type: boolean
+        default: false
+      max_per_run:
+        description: Maximum new releases to publish in this run (1-128)
+        type: number
+        default: 128
+
+permissions:
+  contents: read
+
+concurrency:
+  group: surge-release-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'LOVECHEN/surge-release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Random schedule offset
+        if: github.event_name == 'schedule'
+        run: sleep "$(shuf -i 0-1800 -n 1)"
+      - name: Mirror release and beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_PER_RUN: ${{ inputs.max_per_run || 8 }}
+          BACKFILL: ${{ inputs.backfill || 'false' }}
+          SURGE_RLS_APPCAST: ${{ secrets.SURGE_RLS_APPCAST }}
+          SURGE_BETA_APPCAST: ${{ secrets.SURGE_BETA_APPCAST }}
+          SURGE_ARCHIVE_APPCASTS: ${{ secrets.SURGE_ARCHIVE_APPCASTS }}
+          SURGE_LEGACY_ZIP: ${{ secrets.SURGE_LEGACY_ZIP }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          if [ "$BACKFILL" = "true" ]; then
+            python3 -I -B scripts/mirror.py --backfill --max-per-run "$MAX_PER_RUN"
+          else
+            python3 -I -B scripts/mirror.py --max-per-run "$MAX_PER_RUN"
+          fi
+
+  keepalive:
+    if: github.repository == 'LOVECHEN/surge-release' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Keep scheduled workflow active
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date -u +%u)" != 7 ] || [ "$(date -u +%H)" != 00 ]; then exit 0; fi
+          date -u '+Last checked: %Y-%m-%d %H:%M UTC' > .keepalive
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .keepalive
+          git commit -m 'chore: keep scheduled mirror active'
+          git push
+
+  cleanup-runs:
+    if: always() && github.repository == 'LOVECHEN/surge-release'
+    needs: [mirror, keepalive]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep only the current workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/mirror.yml/runs?per_page=100" \
+            --jq '.workflow_runs[] | select(.status == "completed") | .id')
+          while IFS= read -r run_id; do
+            if [ -n "$run_id" ] && [ "$run_id" != "$GITHUB_RUN_ID" ]; then
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$run_id"
+            fi
+          done <<< "$runs"
