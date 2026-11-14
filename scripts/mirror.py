@@ -213,6 +213,11 @@ def with_changelog(body: str, markdown: str) -> str:
     return f"{body.rstrip()}\n\n{block}\n"
 
 
+def without_redundant_title(body: str, title: str) -> str:
+    heading = f"## {title}\n\n"
+    return body.removeprefix(heading)
+
+
 def sync_changelogs(repo: str, builds: list[Build]) -> int:
     builds_by_tag = {build.tag: build for build in builds}
     updated = 0
@@ -221,7 +226,8 @@ def sync_changelogs(repo: str, builds: list[Build]) -> int:
         if not tag.startswith("surge-"):
             continue
         body = release.get("body") or ""
-        new_body = RELEASE_BOILERPLATE.sub("", body)
+        new_body = without_redundant_title(body, release.get("name") or "")
+        new_body = RELEASE_BOILERPLATE.sub("", new_body)
         if build := builds_by_tag.get(tag):
             new_body = with_changelog(new_body, build.changelog)
         if new_body == body:
@@ -302,10 +308,7 @@ def publish(repo: str, build: Build, latest_stable_tag: str, repair: bool = Fals
         checksums.write_text(f"{checksum}  {asset.name}\n", encoding="utf-8")
         notes = directory / "RELEASE_NOTES.md"
         channel_name = "Release" if build.channel == "rls" else "Beta"
-        body = (
-            f"## Surge for Mac {build.version} ({build.number}) · {channel_name}\n\n"
-            f"- SHA-256: `{checksum}`\n"
-        )
+        body = f"- SHA-256: `{checksum}`\n"
         notes.write_text(with_changelog(body, build.changelog), encoding="utf-8")
         if repair:
             command = ["gh", "release", "upload", build.tag, str(asset), str(checksums),

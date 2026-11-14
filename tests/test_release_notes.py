@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.mirror import Build, publish, sync_changelogs
+from scripts.mirror import Build, publish, sync_changelogs, without_redundant_title
 
 
 class ReleaseNotesTests(unittest.TestCase):
@@ -18,8 +18,16 @@ class ReleaseNotesTests(unittest.TestCase):
         publish("LOVECHEN/surge-release", build, build.tag)
 
         self.assertIn("- SHA-256: `", notes[0])
+        self.assertNotIn("## Surge for Mac", notes[0])
         self.assertNotIn("Official, unmodified ZIP.", notes[0])
         self.assertNotIn("- Channel:", notes[0])
+
+    def test_only_matching_leading_title_is_removed(self):
+        title = "Surge for Mac 6.9.0 (12250) · Release"
+        body = f"## {title}\n\n- SHA-256: `abc`\n\n## Changes\n"
+
+        self.assertEqual(without_redundant_title(body, title), "- SHA-256: `abc`\n\n## Changes\n")
+        self.assertEqual(without_redundant_title(body, "Another release"), body)
 
     @patch("scripts.mirror.subprocess.run")
     @patch("scripts.mirror.list_releases")
@@ -35,7 +43,8 @@ class ReleaseNotesTests(unittest.TestCase):
             "<!-- promoted-beta: surge-00012249-beta-v6.9.0 -->\n"
         )
         list_releases.return_value = [
-            {"id": 1, "tag_name": "surge-00012250-rls-v6.9.0", "body": old_body},
+            {"id": 1, "tag_name": "surge-00012250-rls-v6.9.0",
+             "name": "Surge for Mac 6.9.0 (12250) · Release", "body": old_body},
             {"id": 2, "tag_name": "other-project", "body": old_body},
         ]
 
@@ -49,6 +58,7 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("<!-- promoted-beta:", command[-1])
         self.assertNotIn("Official, unmodified ZIP.", command[-1])
         self.assertNotIn("- Channel:", command[-1])
+        self.assertNotIn("## Surge for Mac", command[-1])
 
 
 if __name__ == "__main__":
