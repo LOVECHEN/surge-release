@@ -36,6 +36,7 @@ PROMOTED_BETA = re.compile(r"<!-- promoted-beta: (surge-[0-9]{8}-beta-v[A-Za-z0-
 SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SOURCE_ADDRESS = re.compile(r"https?://(?:dl\.|www\.)?nssurge\.com/mac/[^\s)<>]+", re.IGNORECASE)
 CHANGELOG_BLOCK = re.compile(r"<!-- surge-changelog:start -->.*?<!-- surge-changelog:end -->", re.DOTALL)
+RELEASE_BOILERPLATE = re.compile(r"(?m)^Official, unmodified ZIP\.\n\n- Channel: `(rls|beta)`\n")
 LEGACY_CHANGELOG = "- Fixed a compatibility issue with 304 responses.\n- Fixed a Dashboard crash."
 
 
@@ -213,14 +214,16 @@ def with_changelog(body: str, markdown: str) -> str:
 
 
 def sync_changelogs(repo: str, builds: list[Build]) -> int:
-    releases = {release["tag_name"]: release for release in list_releases(repo)}
+    builds_by_tag = {build.tag: build for build in builds}
     updated = 0
-    for build in builds:
-        release = releases.get(build.tag)
-        if release is None:
+    for release in list_releases(repo):
+        tag = release.get("tag_name", "")
+        if not tag.startswith("surge-"):
             continue
         body = release.get("body") or ""
-        new_body = with_changelog(body, build.changelog)
+        new_body = RELEASE_BOILERPLATE.sub("", body)
+        if build := builds_by_tag.get(tag):
+            new_body = with_changelog(new_body, build.changelog)
         if new_body == body:
             continue
         subprocess.run(
@@ -229,7 +232,7 @@ def sync_changelogs(repo: str, builds: list[Build]) -> int:
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        print(f"Updated changelog {build.tag}", flush=True)
+        print(f"Updated release notes {tag}", flush=True)
         updated += 1
     return updated
 
@@ -301,8 +304,6 @@ def publish(repo: str, build: Build, latest_stable_tag: str, repair: bool = Fals
         channel_name = "Release" if build.channel == "rls" else "Beta"
         body = (
             f"## Surge for Mac {build.version} ({build.number}) · {channel_name}\n\n"
-            "Official, unmodified ZIP.\n\n"
-            f"- Channel: `{build.channel}`\n"
             f"- SHA-256: `{checksum}`\n"
         )
         notes.write_text(with_changelog(body, build.changelog), encoding="utf-8")
